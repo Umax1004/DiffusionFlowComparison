@@ -209,6 +209,8 @@ def main(cfg: DictConfig):
                 },
                 step=global_step,
             )
+
+            pbar.set_postfix(loss=f"{loss.item():.4f}", refresh=False)
             
             if global_step > 0 and global_step % cfg.eval.sample_every == 0:
                 print(f"\nSampling at step {global_step}...")
