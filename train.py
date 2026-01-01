@@ -40,7 +40,7 @@ def to_uint8(imgs: torch.Tensor) -> torch.Tensor:
     """Convert float32 [0,1] -> uint8 [0,255] safely"""
     return (imgs.clamp(0, 1) * 255).round().to(torch.uint8)
 
-@hydra.main(version_base=None, config_path="configs", config_name="ddpm_baseline")
+@hydra.main(version_base=None, config_path="configs", config_name="ddpm_fast")
 def main(cfg: DictConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -172,10 +172,15 @@ def main(cfg: DictConfig):
             if cfg.precision.use_scaler:
                 with autocast(device_type='cuda', dtype=amp_dtype):
                     model_output = model(noisy_images, timesteps).sample
-                    loss = loss_fn(model_output, noise)
-                    # snr = scheduler.alphas_cumprod[timesteps] / (1 - scheduler.alphas_cumprod[timesteps])
-                    # snr = torch.clamp(snr, min=1e-5)
-                    # loss = (mse / (snr + 5.0) + 1.0).mean()  # Min-SNR-gamma=5
+                    if cfg.training.loss_fn == 'mse':
+                        loss = loss_fn(model_output, noise)
+                    elif cfg.training.loss_fn == 'snr':
+                        mse = loss_fn(model_output, noise)
+                        snr = scheduler.alphas_cumprod[timesteps] / (1 - scheduler.alphas_cumprod[timesteps])  # correct
+                        gamma = torch.tensor(cfg.training.gamma, device=snr.device, dtype=snr.dtype)
+                        min_snr_gamma = torch.minimum(snr, gamma)    
+                        weight = min_snr_gamma / snr
+                        loss = (weight * mse).mean()
 
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -205,13 +210,13 @@ def main(cfg: DictConfig):
                 step=global_step,
             )
             
-            if global_step % cfg.eval.sample_every == 0:
+            if global_step > 0 and global_step % cfg.eval.sample_every == 0:
                 print(f"\nSampling at step {global_step}...")
 
                 # Swap to EMA weights
                 ema_model.module.eval()
 
-                scheduler.set_timesteps(250)
+                scheduler.set_timesteps(cfg.eval.sample_steps)
 
                 samples = sample_ddpm(
                     model=ema_model.module,
@@ -230,10 +235,10 @@ def main(cfg: DictConfig):
                 ema_model.module.train()
                 model.train()
                 
-            if global_step % cfg.eval.fid_every == 0:
+            if global_step > 0 and global_step % cfg.eval.fid_every == 0:
                 # FID generation with cfg.eval.fid_num_samples, cfg.eval.fid_batch_size
                 ema_model.module.eval()
-                scheduler.set_timesteps(250)
+                scheduler.set_timesteps(cfg.eval.sample_steps)
 
                 with autocast(device_type='cuda', dtype=amp_dtype, enabled=cfg.precision.use_scaler):
                     with torch.no_grad():

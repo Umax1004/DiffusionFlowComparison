@@ -1,7 +1,7 @@
 globals:
   seed: 42
   project_name: ddpm-celebahq
-  run_name: unet3m-128-adamw8bit-ema
+  run_name: unet3m-128-adamw8bit-snr
 
 data:
   dataset: CelebA-HQ
@@ -45,12 +45,13 @@ training:
     min_lr_ratio: 0.1
   ema_decay: 0.9999
   grad_clip: 30.0
-  loss_fn: mse
+  loss_fn: snr
+  gamma: 5.0
 
 diffusion:
   _target_: diffusers.DDPMScheduler
   num_train_timesteps: 1000
-  beta_schedule: linear
+  beta_schedule: squaredcos_cap_v2
 
 precision:
   use_scaler: true
